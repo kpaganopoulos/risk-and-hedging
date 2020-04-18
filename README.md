@@ -16,3 +16,5 @@ In addition to fuel costs, the plant costs 140,000 GBP per day to run in operati
 4. (40%) Suppose it is desired to minimize expected shortfall and the current market price for a futures contract (CFD) are £49 per MWh for peak electricity (i.e. in the period 8 am to 8 pm), and 43 pence per therm for gas. What quantities of these two contracts would you recommend buying or selling in order to minimize the 95% expected shortfall for daily profit? (Assume the same pattern of outages as in part 3.) You need to explain the method you have used to obtain your answer.
 
 On the hub you will find a spreadsheet that gives the original data and also a method for producing samples from a bivariate normal distribution with given means and covariance structure. You will find that there are functions to do this in both R and Python.
+
+See html output from R markdown at https://kpaganopoulos.github.io/risk-and-hedging/
