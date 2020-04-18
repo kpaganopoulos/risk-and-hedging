@@ -1,0 +1,151 @@
+---
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## Risk and Hedging Assignment
+
+First we import the relevant libraries:
+
+```{r}
+library(readxl)
+library(forecast)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(padr)
+library(tm)
+library(rlist)
+library(ggplot2)
+library(SciViews)
+```
+
+Then we upload the data for prices of gas and electricity for November:
+
+```{r}
+data_orig <- read_xlsx("Data_Risk_Hedging.xlsx")
+```
+
+### Question (a): 
+
+Calculation of daily profit
+
+```{r}
+data_new <- mutate(data_orig, plant_costs_daily = 140000,
+                   fuel_costs_daily = (50*250000+(12*48223-250000)*`gas price`)/100,
+                   revenue_daily = 700*12*`electricity price`)
+data_new <- mutate(data_new, profit_daily = revenue_daily-fuel_costs_daily-plant_costs_daily)
+print(mean(data_new$profit_daily))
+```
+
+### Question (b): 
+
+Daily profit distribution based on electricity_price and gas_price normal distributions with mean and std of November data.
+
+First of all, we calculate the mean and std for the gas price and electricity price:
+
+```{r}
+mean_1 <- mean(data_new$`gas price`)
+sd_1 <- sd(data_new$`gas price`)
+mean_2 <- mean(data_new$`electricity price`)
+sd_2 <- sd(data_new$`electricity price`)
+rho <- cor(data_new$`gas price`,data_new$`electricity price`)
+```
+
+Then we generate random numbers from Normal Distribution:
+
+```{r}
+var_1 <- rnorm(10000, mean=0, sd=1)
+var_2 <- rnorm(10000, mean=0, sd=1)
+data_biv<-data.frame(cbind(var_1,var_2))
+data_biv <- mutate(data_biv, X = mean_1+sd_1*var_1, Y = mean_2+sd_2*(rho*var_1+var_2*sqrt(1-rho*rho)))
+```
+
+Now we draw a scatterplot the simulation variables of X and Y in order to observe their correlation:
+
+```{r}
+cor_sim <- cor(data_biv$X,data_biv$Y)
+ggplot(data = data_biv) +
+geom_point(mapping = aes(x = X, y =Y))+geom_smooth(mapping = aes(x = X, y =Y))+theme_bw()+labs(x = "Simulated gas price", y = "Simulated electricity price",title = "Electricity vs gas price simulation")
+ggsave("figure1.png", dpi=500, dev='png', height=4, width=5, units="in")
+```
+
+Now we calculate again the profit for each simulated day:
+
+```{r}
+data_biv <- mutate(data_biv, plant_costs_daily = 140000,
+                   fuel_costs_daily = (50*250000+(12*48223-250000)*X)/100,
+                   revenue_daily = 700*12*Y)
+data_biv <- mutate(data_biv, profit_daily = revenue_daily-fuel_costs_daily-plant_costs_daily)
+```
+
+In order to calculate the 95% expected shortfall for daily profit, we need to find the worst 5% of the daily profits and take their average.
+
+```{r}
+profits <- sort(data_biv$profit_daily)
+ES095 <- sum(head(sort(profits), length(profits)*0.05))/length(profits)*0.05
+ES095
+```
+
+### Question (c): 
+
+We need to add 4% of failures in the daily profit distribution based on electricity_price and gas_price normal distributions with mean and std of November data.
+
+We chose to a random failure for some for the sample (which will be 4% of the total sample).
+We run a bernoulli function in order to generate a vector of length(data_biv) where each cell has a value of 0 with probability 0.96 (no failure) and 1 with probability 0.04 (with failure).
+
+For the days where a failure occured, the daily fuel consumption is halved and the daily revenues are also halved.
+
+For the days where a failure didn't occur, the daily fuel consumption and the daily revenues remain the same as in the previous question.
+
+```{r}
+library(Rlab)
+data_biv_fail <- mutate(data_biv, failure = rbern(length(data_biv$profit_daily),0.04))
+data_biv_fail <- mutate(data_biv_fail, plant_costs_daily = 140000,
+                   fuel_costs_daily = ifelse(failure==1,(50*250000+(12*48223/2-250000)*X)/100,(50*250000+(12*48223-250000)*X)/100),
+                   revenue_daily = ifelse(failure==1,700*12*Y/2,700*12*Y))
+data_biv_fail <- mutate(data_biv_fail, profit_daily = revenue_daily-fuel_costs_daily-plant_costs_daily)
+```
+
+In order to calculate the 95% expected shortfall for daily profit, we need to find the worst 5% of the daily profits and take their average.
+
+```{r}
+profits_fail <- sort(data_biv_fail$profit_daily)
+ES095_fail <- sum(head(sort(profits_fail), length(profits_fail)*0.05))/length(profits_fail)*0.05
+ES095_fail
+```
+
+ES095_fail is smaller than ES095, which makes sense given that during the failure days the revenues are halved whereas plant costs stay the same.
+
+### Question (d): 
+
+We need to minimise the function: z + (1/0.05)sum(max(Li(QG,QE)-z,0))/N.
+
+Basically, we have to define a period from the first day until a period where the electricity price will be stable at 0.49 and an another period where the gas_price will be stable at 0.43.
+
+```{r}
+data_biv_fail_new <- mutate(data_biv_fail,index = seq(1:length(data_biv_fail$profit_daily)))
+
+es.optim <- function(x, data_biv_fail_new){
+  #assigning parameters
+  z <- x[1]
+  QE <- x[2]
+  QG <- x[3]
+  #Calculations
+  data_biv_fail_new <- mutate(data_biv_fail_new,el_price = ifelse(index <= QE,0.49,Y))
+  data_biv_fail_new <- mutate(data_biv_fail_new,gas_price = ifelse(index <= QG,0.43,X))
+  data_biv_fail_new <- mutate(data_biv_fail_new, plant_costs_daily = 140000,
+                   fuel_costs_daily = ifelse(failure==1,(50*250000+(12*48223/2-250000)*gas_price)/100,(50*250000+(12*48223-250000)*gas_price)/100),
+                   revenue_daily = ifelse(failure==1,700*12*el_price/2,700*12*el_price))
+  data_biv_fail_new <- mutate(data_biv_fail_new, profit_daily = revenue_daily-fuel_costs_daily-plant_costs_daily)
+  data_biv_fail_new <- mutate(data_biv_fail_new, losses_daily = -profit_daily)
+  data_biv_fail_new <- mutate(data_biv_fail_new, max_l_0 = pmax(losses_daily-z,0))
+  
+  minima <- z + (1/0.05)*sum(data_biv_fail_new$max_l_0)/length(data_biv_fail_new$max_l_0)  
+
+  return (minima)
+}
+
+optim(x <- c(35000,100,100),fn = es.optim, data_biv_fail_new = data_biv_fail_new,method="L-BFGS-B",lower=c(-Inf,0,0),upper=c(Inf,10000,10000))[1:2]
+```
